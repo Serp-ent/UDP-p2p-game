@@ -1,4 +1,5 @@
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <stdio.h>
@@ -7,7 +8,9 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #define REPLY_MAX 32
@@ -57,8 +60,7 @@ void recvGameInfo(int sockfd, Gra* gra, struct sockaddr_in* clientaddr,
                    sizeof(*clientaddr));
 
             gra->gra.gracz1_wynik = gra->gra.gracz2_wynik = 0;
-            // TODO: improve randomnes
-            gra->gra.currentNumber = getpid() % 10 + 1;
+            gra->gra.currentNumber = rand() % 10 + 1;
             gra->gra.isGameEnd = 0;
             gra->ktory_gracz = 1;
             gra->gra.kogo_tura = 1;
@@ -74,7 +76,8 @@ void recvGameInfo(int sockfd, Gra* gra, struct sockaddr_in* clientaddr,
         gra->gra.gracz2_wynik = ntohl(gra->gra.gracz2_wynik);
         gra->gra.currentNumber = ntohl(gra->gra.currentNumber);
         gra->gra.kogo_tura = ntohl(gra->gra.kogo_tura);
-        printf("\n%s podal wartosc %d", ack->nick, gra->gra.currentNumber);
+        printf("\n%s podal wartosc %d", gra->enemy_name,
+               gra->gra.currentNumber);
 
         if (gra->gra.currentNumber == 50) {
             printf("\nPrzegrana!\n");
@@ -113,8 +116,6 @@ void userInteraction(int sockfd, Gra* gra, struct sockaddr_in* clientaddr,
                 continue;
             }
 
-            // TODO: user that turn currently is have points displayed in
-            // network byte order e.g. instead of 1 : 1 he have 16777216
             if (gra->ktory_gracz == 1) {
                 printf("Ty %d : %d %s\n", gra->gra.gracz1_wynik,
                        gra->gra.gracz2_wynik, gra->enemy_name);
@@ -181,19 +182,28 @@ int main(int argc, char* argv[]) {
     struct sockaddr_in my_addr;
     int sockfd;
     int port;
+    key_t key;
+    Gra* gra;
+
+    int status;
+    struct addrinfo hints;
+    struct addrinfo *results, *p;
 
     struct Umowa ack;
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_flags = 0;
+    hints.ai_protocol = 0;
 
     // TODO: BUG: error handling
     if (argc != 5) {
         fprintf(stderr, "Prosze podac cztery argumenty\n");
         exit(1);
     }
+    srand(time(NULL));
 
-    key_t key;
-    Gra* gra;
-
-    // TODO: getaddrinfo():
     key = ftok("main.c", argv[4][0]);
     port = 30000 + argv[4][0];
 
@@ -204,7 +214,24 @@ int main(int argc, char* argv[]) {
         exit(1);
     }
 
-    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    status = getaddrinfo(argv[1], argv[2], &hints, &results);
+    if (status != 0) {
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(status));
+        shmget(key, IPC_RMID, 0);
+        exit(1);
+    }
+
+    for (p = results; p != NULL; p = p->ai_next) {
+        sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        if (sockfd == -1) continue;
+
+        break;
+    }
+    if (p == NULL) {  // zaden adres nie byl dobry
+        fprintf(stderr, "Could not connect\n");
+        exit(1);
+    }
+    freeaddrinfo(results);
 
     memset(&my_addr, 0, sizeof(my_addr));
     my_addr.sin_family = AF_INET;
@@ -218,7 +245,6 @@ int main(int argc, char* argv[]) {
     inet_aton(argv[1], &gra->clientaddr.sin_addr);
 
     printf("Gra w 50, Wersja A. (PORT: %d)\n", port);
-    // TODO: dns look up
     printf("Rozpoczynam gre z %s. ", argv[1]);
     printf(
         "Napisz \"koniec\" by zakonczyc lub "
@@ -258,7 +284,7 @@ int main(int argc, char* argv[]) {
     if (ack.is_server) {
         // to serwer ma poprawnie utworzyc gre
         gra->gra.gracz1_wynik = gra->gra.gracz2_wynik = 0;
-        gra->gra.currentNumber = getpid() % 10 + 1;  // TODO: improve randomness
+        gra->gra.currentNumber = rand() % 10 + 1;
         gra->ktory_gracz = 1;
 
         printf("Losowa wartosc poczatkowa: %d, podaj kolejna wartosc\n",
@@ -270,7 +296,9 @@ int main(int argc, char* argv[]) {
 
     pid = fork();
     if (pid == 0) {
-        recvGameInfo(sockfd, gra, &gra->clientaddr, &gra->clientlen, &ack, argv[3]);
+        recvGameInfo(sockfd, gra, &gra->clientaddr, &gra->clientlen, &ack,
+                     argv[3]);
+        close(sockfd);
         exit(0);
     } else if (pid > 0) {
         userInteraction(sockfd, gra, &gra->clientaddr, gra->clientlen);
@@ -278,6 +306,7 @@ int main(int argc, char* argv[]) {
 
         waitpid(pid, NULL, 0);
 
+        close(sockfd);
         shmdt(gra);
         shmctl(shmid, IPC_RMID, NULL);
     } else {
