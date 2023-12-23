@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,11 +40,15 @@ void recvGameInfo(int sockfd, Game* gra, struct sockaddr_in* clientaddr,
 
         if (gra->currentNumber == 50) {
             printf("\nPrzegrana!\n");
-            printf("Zaczynamy kolejna rozgrywke, poczekaj na swoja kolej\n");
+
+            printf("Zaczynamy kolejna rozgrywke\n");
+            gra->currentNumber = getpid() % 10 + 1;
+            printf("Losowa wartosc poczatkowa %d, podaj kolejna wartosc\n",
+                   gra->currentNumber);
             continue;  // zacznij nowa rozgrywke
         }
 
-        printf("\npodaj kolejna wartosc.\n");
+        printf(", podaj kolejna wartosc.\n");
     }
 }
 
@@ -52,7 +57,7 @@ void userInteraction(int sockfd, Game* gra, struct sockaddr_in* clientaddr,
                      int ktory_gracz) {
     char reply[REPLY_MAX];
     while (8) {
-        printf("(%d) > ", gra->currentNumber);
+        printf("> ");
         scanf(" %31s", reply);
         while (getchar() != '\n')
             ;
@@ -71,8 +76,8 @@ void userInteraction(int sockfd, Game* gra, struct sockaddr_in* clientaddr,
         } else {
             int nowa_wartosc = atoi(reply);
             if (gra->kogo_tura != ktory_gracz) {
-                printf("Teraz tura gracza %s(%d), poczekaj na swoja kolej\n",
-                       enemy_name, gra->kogo_tura);
+                printf("Teraz tura gracza %s, poczekaj na swoja kolej\n",
+                       enemy_name);
                 continue;
             }
 
@@ -90,6 +95,8 @@ void userInteraction(int sockfd, Game* gra, struct sockaddr_in* clientaddr,
                 } else {
                     ++gra->gracz2_wynik;
                 }
+                printf(
+                    "Zaczynamy kolejna rozgrywke., poczekaj na swoja kolej\n");
             }
 
             gra->kogo_tura = htonl((gra->kogo_tura == 1) ? 2 : 1);
@@ -212,7 +219,12 @@ int main(int argc, char* argv[]) {
     } else if (pid > 0) {
         userInteraction(sockfd, gra, &clientaddr, clientlen, ack.nick,
                         ktory_gracz);
+        kill(pid, SIGTERM);
+
         waitpid(pid, NULL, 0);
+
+        shmdt(gra);
+        shmctl(shmid, IPC_RMID, NULL);
     } else {
         perror("Nie mozna utowrzyc potomka fork()");
         exit(1);
