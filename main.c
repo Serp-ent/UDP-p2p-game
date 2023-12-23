@@ -18,6 +18,7 @@ typedef struct {
     int gracz1_wynik;
     int gracz2_wynik;
     int currentNumber;
+    int isGameEnd;
 } Game;
 
 typedef struct Umowa {
@@ -31,6 +32,12 @@ void recvGameInfo(int sockfd, Game* gra, struct sockaddr_in* clientaddr,
     while (8) {
         recvfrom(sockfd, gra, sizeof(Game), 0, (struct sockaddr*)clientaddr,
                  clientlen);
+
+        if (gra->isGameEnd) {
+            printf("\n%s zakonczyl gre, mozesz poczekac na kolejnego gracza.\n",
+                   enemy_name);
+            continue;
+        }
 
         gra->gracz1_wynik = ntohl(gra->gracz1_wynik);
         gra->gracz2_wynik = ntohl(gra->gracz2_wynik);
@@ -63,8 +70,13 @@ void userInteraction(int sockfd, Game* gra, struct sockaddr_in* clientaddr,
             ;
 
         if (strcmp("koniec", reply) == 0) {
-            // TODO: inform second about disconnecting
-            break;
+            gra->isGameEnd = 1;
+            if (sendto(sockfd, gra, sizeof(Game), 0,
+                       (struct sockaddr*)clientaddr, clientlen) == -1) {
+                perror("sendto");
+            }
+
+            break;  // przejdz do czyszczenia
         } else if (strcmp("wynik", reply) == 0) {
             if (ktory_gracz == 1) {
                 printf("Ty %d : %d %s\n", gra->gracz1_wynik, gra->gracz2_wynik,
@@ -171,7 +183,6 @@ int main(int argc, char* argv[]) {
         "\"wynik\" by wyswietlic aktualny\n");
 
     // begin acknowledge connection
-    // begin acknowledge connection
     strcpy(ack.nick, argv[3]);
     ack.is_server = 0;
 
@@ -197,6 +208,7 @@ int main(int argc, char* argv[]) {
     // end acknowledge
 
     gra->kogo_tura = 1;
+    gra->isGameEnd = 0;
     if (ack.is_server) {
         // to serwer ma poprawnie utworzyc gre
         gra->gracz1_wynik = gra->gracz2_wynik = 0;
@@ -208,7 +220,6 @@ int main(int argc, char* argv[]) {
 
     } else {
         ktory_gracz = 2;
-        printf("Czekam zeby dostac wartosci od serwera\n");
     }
 
     pid = fork();
