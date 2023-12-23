@@ -24,7 +24,10 @@ typedef struct {
 typedef struct {
     int ktory_gracz;
     GraPakiet gra;
+
     char enemy_name[NAZWA_MAX];
+    struct sockaddr_in clientaddr;
+    socklen_t clientlen;
 } Gra;
 
 typedef struct Umowa {
@@ -179,9 +182,6 @@ int main(int argc, char* argv[]) {
     int sockfd;
     int port;
 
-    struct sockaddr_in clientaddr;
-    socklen_t clientlen;
-
     struct Umowa ack;
 
     // TODO: BUG: error handling
@@ -194,13 +194,8 @@ int main(int argc, char* argv[]) {
     Gra* gra;
 
     // TODO: getaddrinfo():
-    if (strcmp(argv[4], "-s") == 0) {
-        key = ftok("main.c", 'a');
-        port = 30000 + 1;
-    } else {
-        key = ftok("main.c", 'b');
-        port = 30000;
-    }
+    key = ftok("main.c", argv[4][0]);
+    port = 30000 + argv[4][0];
 
     shmid = shmget(key, sizeof(Gra), 0644 | IPC_CREAT);
     gra = shmat(shmid, NULL, 0);
@@ -217,10 +212,10 @@ int main(int argc, char* argv[]) {
     my_addr.sin_addr.s_addr = htonl(INADDR_ANY);  // dowolny (moj) interfejs
     bind(sockfd, (struct sockaddr*)&my_addr, sizeof(my_addr));
 
-    memset(&clientaddr, 0, sizeof(clientaddr));
-    clientaddr.sin_family = AF_INET;
-    clientaddr.sin_port = htons((u_short)atoi(argv[2]));
-    inet_aton(argv[1], &clientaddr.sin_addr);
+    memset(&gra->clientaddr, 0, sizeof(gra->clientaddr));
+    gra->clientaddr.sin_family = AF_INET;
+    gra->clientaddr.sin_port = htons((u_short)atoi(argv[2]));
+    inet_aton(argv[1], &gra->clientaddr.sin_addr);
 
     printf("Gra w 50, Wersja A. (PORT: %d)\n", port);
     // TODO: dns look up
@@ -233,12 +228,12 @@ int main(int argc, char* argv[]) {
     strcpy(ack.nick, argv[3]);
     ack.is_server = 0;
 
-    sendto(sockfd, &ack, sizeof(ack), 0, (struct sockaddr*)&clientaddr,
-           sizeof(clientaddr));
+    sendto(sockfd, &ack, sizeof(ack), 0, (struct sockaddr*)&gra->clientaddr,
+           sizeof(gra->clientaddr));
     printf("Propozycja gry wyslana.\n");
 
-    recvfrom(sockfd, &ack, sizeof(ack), 0, (struct sockaddr*)&clientaddr,
-             &clientlen);
+    recvfrom(sockfd, &ack, sizeof(ack), 0, (struct sockaddr*)&gra->clientaddr,
+             &gra->clientlen);
 
     if (!ack.is_server) {  // host mowi ze nie jest serwerem
         // wiec to ten host powinien byc serwerem
@@ -247,15 +242,15 @@ int main(int argc, char* argv[]) {
 
         strcpy(ack.nick, argv[3]);
 
-        sendto(sockfd, &ack, sizeof(ack), 0, (struct sockaddr*)&clientaddr,
-               sizeof(clientaddr));
+        sendto(sockfd, &ack, sizeof(ack), 0, (struct sockaddr*)&gra->clientaddr,
+               sizeof(gra->clientaddr));
     } else {
         // wiec ten host powinen byc klientem
         ack.is_server = 0;
         strcpy(gra->enemy_name, ack.nick);
     }
 
-    printf("%s dolaczyl do gry.\n", inet_ntoa(clientaddr.sin_addr));
+    printf("%s dolaczyl do gry.\n", inet_ntoa(gra->clientaddr.sin_addr));
     // end acknowledge
 
     gra->gra.kogo_tura = 1;
@@ -275,10 +270,10 @@ int main(int argc, char* argv[]) {
 
     pid = fork();
     if (pid == 0) {
-        recvGameInfo(sockfd, gra, &clientaddr, &clientlen, &ack, argv[3]);
+        recvGameInfo(sockfd, gra, &gra->clientaddr, &gra->clientlen, &ack, argv[3]);
         exit(0);
     } else if (pid > 0) {
-        userInteraction(sockfd, gra, &clientaddr, clientlen);
+        userInteraction(sockfd, gra, &gra->clientaddr, gra->clientlen);
         kill(pid, SIGTERM);
 
         waitpid(pid, NULL, 0);
