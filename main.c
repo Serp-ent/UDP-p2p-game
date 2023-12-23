@@ -58,6 +58,7 @@ void recvGameInfo(int sockfd, Gra* gra, struct sockaddr_in* clientaddr,
             gra->gra.currentNumber = getpid() % 10 + 1;
             gra->gra.isGameEnd = 0;
             gra->ktory_gracz = 1;
+            gra->gra.kogo_tura = 1;
 
             printf("%s dolaczyl do gry.\n", inet_ntoa(clientaddr->sin_addr));
 
@@ -112,11 +113,11 @@ void userInteraction(int sockfd, Gra* gra, struct sockaddr_in* clientaddr,
             // TODO: user that turn currently is have points displayed in
             // network byte order e.g. instead of 1 : 1 he have 16777216
             if (gra->ktory_gracz == 1) {
-                printf("Ty %d : %d %s\n", ntohl(gra->gra.gracz1_wynik),
-                       ntohl(gra->gra.gracz2_wynik), gra->enemy_name);
+                printf("Ty %d : %d %s\n", gra->gra.gracz1_wynik,
+                       gra->gra.gracz2_wynik, gra->enemy_name);
             } else {
-                printf("Ty %d : %d %s\n", ntohl(gra->gra.gracz2_wynik),
-                       ntohl(gra->gra.gracz1_wynik), gra->enemy_name);
+                printf("Ty %d : %d %s\n", gra->gra.gracz2_wynik,
+                       gra->gra.gracz1_wynik, gra->enemy_name);
             }
         } else {
             if (gra->gra.isGameEnd) {
@@ -159,6 +160,13 @@ void userInteraction(int sockfd, Gra* gra, struct sockaddr_in* clientaddr,
                        (struct sockaddr*)clientaddr, clientlen) == -1) {
                 perror("sendto");
             }
+
+            // change local game data to host byte order for case user enters
+            // 'wynik'
+            gra->gra.kogo_tura = ntohl(gra->gra.kogo_tura);
+            gra->gra.gracz1_wynik = ntohl(gra->gra.gracz1_wynik);
+            gra->gra.gracz2_wynik = ntohl(gra->gra.gracz2_wynik);
+            gra->gra.currentNumber = ntohl(gra->gra.currentNumber);
         }
     }
 }
