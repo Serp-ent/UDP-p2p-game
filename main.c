@@ -19,39 +19,66 @@ typedef struct {
     int gracz2_wynik;
     int currentNumber;
     int isGameEnd;
-} Game;
+} GraPakiet;
+
+typedef struct {
+    int ktory_gracz;
+    GraPakiet gra;
+    char enemy_name[NAZWA_MAX];
+} Gra;
 
 typedef struct Umowa {
     char is_server;
     char nick[NAZWA_MAX];
 } Umowa;
 
-void recvGameInfo(int sockfd, Game* gra, struct sockaddr_in* clientaddr,
-                  socklen_t* clientlen, const char* enemy_name,
-                  int ktory_gracz) {
+void recvGameInfo(int sockfd, Gra* gra, struct sockaddr_in* clientaddr,
+                  socklen_t* clientlen, Umowa* ack, const char* moj_nick) {
     while (8) {
-        recvfrom(sockfd, gra, sizeof(Game), 0, (struct sockaddr*)clientaddr,
-                 clientlen);
+        recvfrom(sockfd, &gra->gra, sizeof(GraPakiet), 0,
+                 (struct sockaddr*)clientaddr, clientlen);
 
-        if (gra->isGameEnd) {
+        if (gra->gra.isGameEnd) {
             printf("\n%s zakonczyl gre, mozesz poczekac na kolejnego gracza.\n",
-                   enemy_name);
+                   gra->enemy_name);
+
+            // wiemy ze teraz to my bedziemy serwerem
+
+            recvfrom(sockfd, ack, sizeof(*ack), 0, (struct sockaddr*)clientaddr,
+                     clientlen);
+            ack->is_server = 1;
+            strcpy(gra->enemy_name, ack->nick);  // save enemy nickname
+
+            strcpy(ack->nick, moj_nick);
+            sendto(sockfd, ack, sizeof(*ack), 0, (struct sockaddr*)clientaddr,
+                   sizeof(*clientaddr));
+
+            gra->gra.gracz1_wynik = gra->gra.gracz2_wynik = 0;
+            // TODO: improve randomnes
+            gra->gra.currentNumber = getpid() % 10 + 1;
+            gra->gra.isGameEnd = 0;
+            gra->ktory_gracz = 1;
+
+            printf("%s dolaczyl do gry.\n", inet_ntoa(clientaddr->sin_addr));
+
+            printf("Losowa wartosc poczatkowa: %d, podaj kolejna wartosc\n",
+                   gra->gra.currentNumber);
             continue;
         }
 
-        gra->gracz1_wynik = ntohl(gra->gracz1_wynik);
-        gra->gracz2_wynik = ntohl(gra->gracz2_wynik);
-        gra->currentNumber = ntohl(gra->currentNumber);
-        gra->kogo_tura = ntohl(gra->kogo_tura);
-        printf("\n%s podal wartosc %d", enemy_name, gra->currentNumber);
+        gra->gra.gracz1_wynik = ntohl(gra->gra.gracz1_wynik);
+        gra->gra.gracz2_wynik = ntohl(gra->gra.gracz2_wynik);
+        gra->gra.currentNumber = ntohl(gra->gra.currentNumber);
+        gra->gra.kogo_tura = ntohl(gra->gra.kogo_tura);
+        printf("\n%s podal wartosc %d", ack->nick, gra->gra.currentNumber);
 
-        if (gra->currentNumber == 50) {
+        if (gra->gra.currentNumber == 50) {
             printf("\nPrzegrana!\n");
 
             printf("Zaczynamy kolejna rozgrywke\n");
-            gra->currentNumber = getpid() % 10 + 1;
+            gra->gra.currentNumber = getpid() % 10 + 1;
             printf("Losowa wartosc poczatkowa %d, podaj kolejna wartosc\n",
-                   gra->currentNumber);
+                   gra->gra.currentNumber);
             continue;  // zacznij nowa rozgrywke
         }
 
@@ -59,64 +86,76 @@ void recvGameInfo(int sockfd, Game* gra, struct sockaddr_in* clientaddr,
     }
 }
 
-void userInteraction(int sockfd, Game* gra, struct sockaddr_in* clientaddr,
-                     socklen_t clientlen, const char* enemy_name,
-                     int ktory_gracz) {
+void userInteraction(int sockfd, Gra* gra, struct sockaddr_in* clientaddr,
+                     socklen_t clientlen) {
     char reply[REPLY_MAX];
     while (8) {
-        printf("> ");
+        printf("(ktory_gracz = %d)> ", gra->ktory_gracz);
         scanf(" %31s", reply);
         while (getchar() != '\n')
             ;
 
         if (strcmp("koniec", reply) == 0) {
-            gra->isGameEnd = 1;
-            if (sendto(sockfd, gra, sizeof(Game), 0,
+            gra->gra.isGameEnd = 1;
+            if (sendto(sockfd, &gra->gra, sizeof(GraPakiet), 0,
                        (struct sockaddr*)clientaddr, clientlen) == -1) {
                 perror("sendto");
             }
 
             break;  // przejdz do czyszczenia
         } else if (strcmp("wynik", reply) == 0) {
-            if (ktory_gracz == 1) {
-                printf("Ty %d : %d %s\n", gra->gracz1_wynik, gra->gracz2_wynik,
-                       enemy_name);
-            } else {
-                printf("Ty %d : %d %s\n", gra->gracz2_wynik, gra->gracz1_wynik,
-                       enemy_name);
-            }
-        } else {
-            int nowa_wartosc = atoi(reply);
-            if (gra->kogo_tura != ktory_gracz) {
-                printf("Teraz tura gracza %s, poczekaj na swoja kolej\n",
-                       enemy_name);
+            if (gra->gra.isGameEnd) {
+                printf("Brak gry w trakcie\n");
                 continue;
             }
 
-            if ((nowa_wartosc - gra->currentNumber) < 1 ||
-                (nowa_wartosc - gra->currentNumber) > 10) {
+            // TODO: user that turn currently is have points displayed in
+            // network byte order e.g. instead of 1 : 1 he have 16777216
+            if (gra->ktory_gracz == 1) {
+                printf("Ty %d : %d %s\n", ntohl(gra->gra.gracz1_wynik),
+                       ntohl(gra->gra.gracz2_wynik), gra->enemy_name);
+            } else {
+                printf("Ty %d : %d %s\n", ntohl(gra->gra.gracz2_wynik),
+                       ntohl(gra->gra.gracz1_wynik), gra->enemy_name);
+            }
+        } else {
+            if (gra->gra.isGameEnd) {
+                printf("Brak gry w trakcie\n");
+                continue;
+            }
+
+            int nowa_wartosc = atoi(reply);
+            if (gra->gra.kogo_tura != gra->ktory_gracz) {
+                printf("Teraz tura gracza %s, poczekaj na swoja kolej\n",
+                       gra->enemy_name);
+                continue;
+            }
+
+            if ((nowa_wartosc - gra->gra.currentNumber) < 1 ||
+                (nowa_wartosc - gra->gra.currentNumber) > 10 ||
+                nowa_wartosc > 50) {
                 printf("Takiej wartosci nie mozesz wybrac!\n");
                 continue;
             }
 
-            gra->currentNumber = nowa_wartosc;
-            if (gra->currentNumber == 50) {
+            gra->gra.currentNumber = nowa_wartosc;
+            if (gra->gra.currentNumber == 50) {
                 printf("Wygrana!\n");
-                if (ktory_gracz == 1) {
-                    ++gra->gracz1_wynik;
+                if (gra->ktory_gracz == 1) {
+                    ++gra->gra.gracz1_wynik;
                 } else {
-                    ++gra->gracz2_wynik;
+                    ++gra->gra.gracz2_wynik;
                 }
                 printf(
                     "Zaczynamy kolejna rozgrywke., poczekaj na swoja kolej\n");
             }
 
-            gra->kogo_tura = htonl((gra->kogo_tura == 1) ? 2 : 1);
-            gra->gracz1_wynik = htonl(gra->gracz1_wynik);
-            gra->gracz2_wynik = htonl(gra->gracz2_wynik);
-            gra->currentNumber = htonl(gra->currentNumber);
+            gra->gra.kogo_tura = htonl((gra->gra.kogo_tura == 1) ? 2 : 1);
+            gra->gra.gracz1_wynik = htonl(gra->gra.gracz1_wynik);
+            gra->gra.gracz2_wynik = htonl(gra->gra.gracz2_wynik);
+            gra->gra.currentNumber = htonl(gra->gra.currentNumber);
 
-            if (sendto(sockfd, gra, sizeof(Game), 0,
+            if (sendto(sockfd, &gra->gra, sizeof(GraPakiet), 0,
                        (struct sockaddr*)clientaddr, clientlen) == -1) {
                 perror("sendto");
             }
@@ -137,8 +176,6 @@ int main(int argc, char* argv[]) {
 
     struct Umowa ack;
 
-    int ktory_gracz;
-
     // TODO: BUG: error handling
     if (argc != 5) {
         fprintf(stderr, "Prosze podac cztery argumenty\n");
@@ -146,20 +183,22 @@ int main(int argc, char* argv[]) {
     }
 
     key_t key;
-    key = ftok("main.c", 'a');
-    shmid = shmget(key, sizeof(Game), 0644 | IPC_CREAT);
-    // TODO: shmdt and cleanup
-    Game* gra = shmat(shmid, NULL, 0);
-    if (gra == (void*)-1) {
-        perror("shmat()");
-        exit(1);
-    }
+    Gra* gra;
 
     // TODO: getaddrinfo():
     if (strcmp(argv[4], "-s") == 0) {
-        port = 30000 + getpid() % 10000 + 1;
+        key = ftok("main.c", 'a');
+        port = 30000 + 1;
     } else {
+        key = ftok("main.c", 'b');
         port = 30000;
+    }
+
+    shmid = shmget(key, sizeof(Gra), 0644 | IPC_CREAT);
+    gra = shmat(shmid, NULL, 0);
+    if (gra == (void*)-1) {
+        perror("shmat()");
+        exit(1);
     }
 
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -188,48 +227,50 @@ int main(int argc, char* argv[]) {
 
     sendto(sockfd, &ack, sizeof(ack), 0, (struct sockaddr*)&clientaddr,
            sizeof(clientaddr));
+    printf("Propozycja gry wyslana.\n");
+
     recvfrom(sockfd, &ack, sizeof(ack), 0, (struct sockaddr*)&clientaddr,
              &clientlen);
 
     if (!ack.is_server) {  // host mowi ze nie jest serwerem
         // wiec to ten host powinien byc serwerem
         ack.is_server = 1;
+        strcpy(gra->enemy_name, ack.nick);  // save enemy nickname
+
         strcpy(ack.nick, argv[3]);
 
-        sendto(sockfd, argv[3], sizeof(ack), 0, (struct sockaddr*)&clientaddr,
+        sendto(sockfd, &ack, sizeof(ack), 0, (struct sockaddr*)&clientaddr,
                sizeof(clientaddr));
     } else {
         // wiec ten host powinen byc klientem
         ack.is_server = 0;
+        strcpy(gra->enemy_name, ack.nick);
     }
 
-    printf("Gra rozpoczeta z %s:%d\n", inet_ntoa(clientaddr.sin_addr),
-           ntohs(clientaddr.sin_port));
+    printf("%s dolaczyl do gry.\n", inet_ntoa(clientaddr.sin_addr));
     // end acknowledge
 
-    gra->kogo_tura = 1;
-    gra->isGameEnd = 0;
+    gra->gra.kogo_tura = 1;
+    gra->gra.isGameEnd = 0;
     if (ack.is_server) {
         // to serwer ma poprawnie utworzyc gre
-        gra->gracz1_wynik = gra->gracz2_wynik = 0;
-        gra->currentNumber = getpid() % 10 + 1;  // TODO: improve randomnes
-        ktory_gracz = 1;
+        gra->gra.gracz1_wynik = gra->gra.gracz2_wynik = 0;
+        gra->gra.currentNumber = getpid() % 10 + 1;  // TODO: improve randomness
+        gra->ktory_gracz = 1;
 
         printf("Losowa wartosc poczatkowa: %d, podaj kolejna wartosc\n",
-               gra->currentNumber);
+               gra->gra.currentNumber);
 
     } else {
-        ktory_gracz = 2;
+        gra->ktory_gracz = 2;
     }
 
     pid = fork();
     if (pid == 0) {
-        recvGameInfo(sockfd, gra, &clientaddr, &clientlen, ack.nick,
-                     ktory_gracz);
+        recvGameInfo(sockfd, gra, &clientaddr, &clientlen, &ack, argv[3]);
         exit(0);
     } else if (pid > 0) {
-        userInteraction(sockfd, gra, &clientaddr, clientlen, ack.nick,
-                        ktory_gracz);
+        userInteraction(sockfd, gra, &clientaddr, clientlen);
         kill(pid, SIGTERM);
 
         waitpid(pid, NULL, 0);
