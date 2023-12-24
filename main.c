@@ -216,13 +216,24 @@ int main(int argc, char* argv[]) {
         key = ftok("main.c", argv[4][0]);
         port = 30000 + argv[4][0];
     } else if (argc == 4) {
+        key = ftok("main.c", argv[3][0]);
         port = 30000 + argv[3][0];
     } else {
         fprintf(stderr, "Prosze podac conajmniej cztery argumenty\n");
         exit(1);
     }
 
+    if (key == -1) {
+        perror("Nie mozna wygenerowac klucza");
+        exit(1);
+    }
+
     shmid = shmget(key, sizeof(Gra), 0644 | IPC_CREAT);
+    if (shmid == -1) {
+        perror("Nie mozna utworzyc pamieci wspoldzielonej");
+        exit(1);
+    }
+
     gra = shmat(shmid, NULL, 0);
     if (gra == (void*)-1) {
         perror("shmat()");
@@ -232,7 +243,9 @@ int main(int argc, char* argv[]) {
     status = getaddrinfo(argv[1], argv[2], &hints, &results);
     if (status != 0) {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(status));
-        shmget(key, IPC_RMID, 0);
+        if (shmget(key, IPC_RMID, 0) == -1) {
+            perror("Nie mozna usunac pamieci wspoldzielonej");
+        }
         exit(1);
     }
 
@@ -243,7 +256,7 @@ int main(int argc, char* argv[]) {
         break;
     }
     if (p == NULL) {  // zaden adres nie byl dobry
-        fprintf(stderr, "Could not connect\n");
+        fprintf(stderr, "Nie mozna utowrzyc socketu\n");
         exit(1);
     }
     freeaddrinfo(results);
@@ -252,7 +265,10 @@ int main(int argc, char* argv[]) {
     my_addr.sin_family = AF_INET;
     my_addr.sin_port = htons(port);
     my_addr.sin_addr.s_addr = htonl(INADDR_ANY);  // dowolny (moj) interfejs
-    bind(sockfd, (struct sockaddr*)&my_addr, sizeof(my_addr));
+    if (bind(sockfd, (struct sockaddr*)&my_addr, sizeof(my_addr)) == -1) {
+        perror("Nie mozna powiazac socketu z portem");
+        exit(1);
+    }
 
     memset(&gra->clientaddr, 0, sizeof(gra->clientaddr));
     gra->clientaddr.sin_family = AF_INET;
