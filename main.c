@@ -22,13 +22,15 @@ typedef struct {
     int gracz2_wynik;
     int currentNumber;
     int isGameEnd;
-} GraPakiet;
+} Pakiet;
 
 typedef struct {
     int ktory_gracz;
-    GraPakiet gra;
+    Pakiet gra;
 
     char enemy_name[NAZWA_MAX];
+    char moja_nazwa[NAZWA_MAX];
+
     struct sockaddr_in clientaddr;
     socklen_t clientlen;
 } Gra;
@@ -38,11 +40,10 @@ typedef struct Umowa {
     char nick[NAZWA_MAX];
 } Umowa;
 
-void recvGameInfo(int sockfd, Gra* gra, struct sockaddr_in* clientaddr,
-                  socklen_t* clientlen, Umowa* ack, const char* moj_nick) {
+void recvGameInfo(int sockfd, Gra* gra, Umowa* ack) {
     while (8) {
-        recvfrom(sockfd, &gra->gra, sizeof(GraPakiet), 0,
-                 (struct sockaddr*)clientaddr, clientlen);
+        recvfrom(sockfd, &gra->gra, sizeof(Pakiet), 0,
+                 (struct sockaddr*)&gra->clientaddr, &gra->clientlen);
 
         if (gra->gra.isGameEnd) {
             printf("\n%s zakonczyl gre, mozesz poczekac na kolejnego gracza.\n",
@@ -50,14 +51,14 @@ void recvGameInfo(int sockfd, Gra* gra, struct sockaddr_in* clientaddr,
 
             // wiemy ze teraz to my bedziemy serwerem
 
-            recvfrom(sockfd, ack, sizeof(*ack), 0, (struct sockaddr*)clientaddr,
-                     clientlen);
+            recvfrom(sockfd, ack, sizeof(*ack), 0,
+                     (struct sockaddr*)&gra->clientaddr, &gra->clientlen);
             ack->is_server = 1;
             strcpy(gra->enemy_name, ack->nick);  // save enemy nickname
 
-            strcpy(ack->nick, moj_nick);
-            sendto(sockfd, ack, sizeof(*ack), 0, (struct sockaddr*)clientaddr,
-                   sizeof(*clientaddr));
+            strcpy(ack->nick, gra->moja_nazwa);
+            sendto(sockfd, ack, sizeof(*ack), 0,
+                   (struct sockaddr*)&gra->clientaddr, sizeof(gra->clientaddr));
 
             gra->gra.gracz1_wynik = gra->gra.gracz2_wynik = 0;
             gra->gra.currentNumber = rand() % 10 + 1;
@@ -65,7 +66,8 @@ void recvGameInfo(int sockfd, Gra* gra, struct sockaddr_in* clientaddr,
             gra->ktory_gracz = 1;
             gra->gra.kogo_tura = 1;
 
-            printf("%s dolaczyl do gry.\n", inet_ntoa(clientaddr->sin_addr));
+            printf("%s dolaczyl do gry.\n",
+                   inet_ntoa(gra->clientaddr.sin_addr));
 
             printf("Losowa wartosc poczatkowa: %d, podaj kolejna wartosc\n",
                    gra->gra.currentNumber);
@@ -93,19 +95,19 @@ void recvGameInfo(int sockfd, Gra* gra, struct sockaddr_in* clientaddr,
     }
 }
 
-void userInteraction(int sockfd, Gra* gra, struct sockaddr_in* clientaddr,
-                     socklen_t clientlen) {
+void userInteraction(int sockfd, Gra* gra) {
     char reply[REPLY_MAX];
     while (8) {
-        printf("(ktory_gracz = %d)> ", gra->ktory_gracz);
+        printf("> ");
         scanf(" %31s", reply);
         while (getchar() != '\n')
             ;
 
         if (strcmp("koniec", reply) == 0) {
             gra->gra.isGameEnd = 1;
-            if (sendto(sockfd, &gra->gra, sizeof(GraPakiet), 0,
-                       (struct sockaddr*)clientaddr, clientlen) == -1) {
+            if (sendto(sockfd, &gra->gra, sizeof(Pakiet), 0,
+                       (struct sockaddr*)&gra->clientaddr,
+                       gra->clientlen) == -1) {
                 perror("sendto");
             }
 
@@ -160,8 +162,9 @@ void userInteraction(int sockfd, Gra* gra, struct sockaddr_in* clientaddr,
             gra->gra.gracz2_wynik = htonl(gra->gra.gracz2_wynik);
             gra->gra.currentNumber = htonl(gra->gra.currentNumber);
 
-            if (sendto(sockfd, &gra->gra, sizeof(GraPakiet), 0,
-                       (struct sockaddr*)clientaddr, clientlen) == -1) {
+            if (sendto(sockfd, &gra->gra, sizeof(Pakiet), 0,
+                       (struct sockaddr*)&gra->clientaddr,
+                       gra->clientlen) == -1) {
                 perror("sendto");
             }
 
@@ -250,8 +253,10 @@ int main(int argc, char* argv[]) {
         "Napisz \"koniec\" by zakonczyc lub "
         "\"wynik\" by wyswietlic aktualny\n");
 
+    strcpy(gra->moja_nazwa, argv[3]);
+
     // begin acknowledge connection
-    strcpy(ack.nick, argv[3]);
+    strcpy(ack.nick, gra->moja_nazwa);
     ack.is_server = 0;
 
     sendto(sockfd, &ack, sizeof(ack), 0, (struct sockaddr*)&gra->clientaddr,
@@ -266,7 +271,7 @@ int main(int argc, char* argv[]) {
         ack.is_server = 1;
         strcpy(gra->enemy_name, ack.nick);  // save enemy nickname
 
-        strcpy(ack.nick, argv[3]);
+        strcpy(ack.nick, gra->moja_nazwa);
 
         sendto(sockfd, &ack, sizeof(ack), 0, (struct sockaddr*)&gra->clientaddr,
                sizeof(gra->clientaddr));
@@ -296,12 +301,11 @@ int main(int argc, char* argv[]) {
 
     pid = fork();
     if (pid == 0) {
-        recvGameInfo(sockfd, gra, &gra->clientaddr, &gra->clientlen, &ack,
-                     argv[3]);
+        recvGameInfo(sockfd, gra, &ack);
         close(sockfd);
         exit(0);
     } else if (pid > 0) {
-        userInteraction(sockfd, gra, &gra->clientaddr, gra->clientlen);
+        userInteraction(sockfd, gra);
         kill(pid, SIGTERM);
 
         waitpid(pid, NULL, 0);
