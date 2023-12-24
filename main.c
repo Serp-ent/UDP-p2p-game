@@ -47,6 +47,20 @@ void przygotuj_gre(Gra* gra) {
     gra->gra.kogo_tura = 1;
 }
 
+void gra_ustaw_na_hosta(Gra* gra) {
+    gra->gra.gracz1_wynik = ntohl(gra->gra.gracz1_wynik);
+    gra->gra.gracz2_wynik = ntohl(gra->gra.gracz2_wynik);
+    gra->gra.currentNumber = ntohl(gra->gra.currentNumber);
+    gra->gra.kogo_tura = ntohl(gra->gra.kogo_tura);
+}
+
+void gra_ustaw_do_wyslania(Gra* gra) {
+    gra->gra.kogo_tura = htonl(gra->gra.kogo_tura);
+    gra->gra.gracz1_wynik = htonl(gra->gra.gracz1_wynik);
+    gra->gra.gracz2_wynik = htonl(gra->gra.gracz2_wynik);
+    gra->gra.currentNumber = htonl(gra->gra.currentNumber);
+}
+
 void recvGameInfo(int sockfd, Gra* gra, UscikDloni* ack) {
     while (8) {
         recvfrom(sockfd, &gra->gra, sizeof(Pakiet), 0,
@@ -78,10 +92,7 @@ void recvGameInfo(int sockfd, Gra* gra, UscikDloni* ack) {
             continue;
         }
 
-        gra->gra.gracz1_wynik = ntohl(gra->gra.gracz1_wynik);
-        gra->gra.gracz2_wynik = ntohl(gra->gra.gracz2_wynik);
-        gra->gra.currentNumber = ntohl(gra->gra.currentNumber);
-        gra->gra.kogo_tura = ntohl(gra->gra.kogo_tura);
+        gra_ustaw_na_hosta(gra);
         printf("\n%s podal wartosc %d", gra->enemy_name,
                gra->gra.currentNumber);
 
@@ -161,10 +172,8 @@ void userInteraction(int sockfd, Gra* gra) {
                     "Zaczynamy kolejna rozgrywke., poczekaj na swoja kolej\n");
             }
 
-            gra->gra.kogo_tura = htonl((gra->gra.kogo_tura == 1) ? 2 : 1);
-            gra->gra.gracz1_wynik = htonl(gra->gra.gracz1_wynik);
-            gra->gra.gracz2_wynik = htonl(gra->gra.gracz2_wynik);
-            gra->gra.currentNumber = htonl(gra->gra.currentNumber);
+            gra->gra.kogo_tura = (gra->gra.kogo_tura == 1) ? 2 : 1;
+            gra_ustaw_do_wyslania(gra);
 
             if (sendto(sockfd, &gra->gra, sizeof(Pakiet), 0,
                        (struct sockaddr*)&gra->clientaddr,
@@ -172,12 +181,7 @@ void userInteraction(int sockfd, Gra* gra) {
                 perror("sendto");
             }
 
-            // change local game data to host byte order for case user enters
-            // 'wynik'
-            gra->gra.kogo_tura = ntohl(gra->gra.kogo_tura);
-            gra->gra.gracz1_wynik = ntohl(gra->gra.gracz1_wynik);
-            gra->gra.gracz2_wynik = ntohl(gra->gra.gracz2_wynik);
-            gra->gra.currentNumber = ntohl(gra->gra.currentNumber);
+            gra_ustaw_na_hosta(gra);
         }
     }
 }
@@ -239,7 +243,6 @@ int main(int argc, char* argv[]) {
 
     srand(time(NULL));
 
-    // TODO: BUG: error handling
     if (argc == 5) {
         key = ftok("main.c", argv[4][0]);
         port = 30000 + argv[4][0];
