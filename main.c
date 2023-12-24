@@ -21,7 +21,7 @@ typedef struct {
     int gracz1_wynik;
     int gracz2_wynik;
     int currentNumber;
-    int isGameEnd;
+    int czyKoniecGry;
 } Pakiet;
 
 typedef struct {
@@ -38,14 +38,21 @@ typedef struct {
 typedef struct Umowa {
     char is_server;
     char nick[NAZWA_MAX];
-} Umowa;
+} UscikDloni;
 
-void recvGameInfo(int sockfd, Gra* gra, Umowa* ack) {
+void przygotuj_gre(Gra* gra) {
+    gra->gra.gracz1_wynik = gra->gra.gracz2_wynik = 0;
+    gra->gra.currentNumber = rand() % 10 + 1;
+    gra->gra.czyKoniecGry = 0;
+    gra->gra.kogo_tura = 1;
+}
+
+void recvGameInfo(int sockfd, Gra* gra, UscikDloni* ack) {
     while (8) {
         recvfrom(sockfd, &gra->gra, sizeof(Pakiet), 0,
                  (struct sockaddr*)&gra->clientaddr, &gra->clientlen);
 
-        if (gra->gra.isGameEnd) {
+        if (gra->gra.czyKoniecGry) {
             printf("\n%s zakonczyl gre, mozesz poczekac na kolejnego gracza.\n",
                    gra->enemy_name);
 
@@ -60,11 +67,8 @@ void recvGameInfo(int sockfd, Gra* gra, Umowa* ack) {
             sendto(sockfd, ack, sizeof(*ack), 0,
                    (struct sockaddr*)&gra->clientaddr, sizeof(gra->clientaddr));
 
-            gra->gra.gracz1_wynik = gra->gra.gracz2_wynik = 0;
-            gra->gra.currentNumber = rand() % 10 + 1;
-            gra->gra.isGameEnd = 0;
-            gra->ktory_gracz = 1;
-            gra->gra.kogo_tura = 1;
+            przygotuj_gre(gra);
+            gra->ktory_gracz = 1;  // serwer czyli 1
 
             printf("%s dolaczyl do gry.\n",
                    inet_ntoa(gra->clientaddr.sin_addr));
@@ -104,7 +108,7 @@ void userInteraction(int sockfd, Gra* gra) {
             ;
 
         if (strcmp("koniec", reply) == 0) {
-            gra->gra.isGameEnd = 1;
+            gra->gra.czyKoniecGry = 1;
             if (sendto(sockfd, &gra->gra, sizeof(Pakiet), 0,
                        (struct sockaddr*)&gra->clientaddr,
                        gra->clientlen) == -1) {
@@ -113,7 +117,7 @@ void userInteraction(int sockfd, Gra* gra) {
 
             break;  // przejdz do czyszczenia
         } else if (strcmp("wynik", reply) == 0) {
-            if (gra->gra.isGameEnd) {
+            if (gra->gra.czyKoniecGry) {
                 printf("Brak gry w trakcie\n");
                 continue;
             }
@@ -126,7 +130,7 @@ void userInteraction(int sockfd, Gra* gra) {
                        gra->gra.gracz1_wynik, gra->enemy_name);
             }
         } else {
-            if (gra->gra.isGameEnd) {
+            if (gra->gra.czyKoniecGry) {
                 printf("Brak gry w trakcie\n");
                 continue;
             }
@@ -177,6 +181,40 @@ void userInteraction(int sockfd, Gra* gra) {
         }
     }
 }
+int przygotuj_socket(char* domena, char* port) {
+    int status;
+    struct addrinfo hints;
+    struct addrinfo *results, *p;
+    int sockfd;
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_flags = 0;
+    hints.ai_protocol = 0;
+
+    status = getaddrinfo(domena, port, &hints, &results);
+    if (status != 0) {
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(status));
+        return -1;
+    }
+
+    for (p = results; p != NULL; p = p->ai_next) {
+        sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        if (sockfd == -1) continue;
+
+        break;
+    }
+
+    if (p == NULL) {  // zaden adres nie byl dobry
+        fprintf(stderr, "Nie mozna utowrzyc socketu\n");
+        freeaddrinfo(results);
+        return -1;
+    }
+    freeaddrinfo(results);
+
+    return sockfd;
+}
 
 void fillWithMyIP(int sockfd, char* buf) {
     struct sockaddr_in addr;
@@ -197,17 +235,7 @@ int main(int argc, char* argv[]) {
     key_t key;
     Gra* gra;
 
-    int status;
-    struct addrinfo hints;
-    struct addrinfo *results, *p;
-
     struct Umowa ack;
-
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_DGRAM;
-    hints.ai_flags = 0;
-    hints.ai_protocol = 0;
 
     srand(time(NULL));
 
@@ -240,26 +268,11 @@ int main(int argc, char* argv[]) {
         exit(1);
     }
 
-    status = getaddrinfo(argv[1], argv[2], &hints, &results);
-    if (status != 0) {
-        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(status));
-        if (shmget(key, IPC_RMID, 0) == -1) {
-            perror("Nie mozna usunac pamieci wspoldzielonej");
-        }
+    sockfd = przygotuj_socket(argv[1], argv[2]);
+    if (sockfd == -1) {
+        shmctl(shmid, IPC_RMID, NULL);
         exit(1);
     }
-
-    for (p = results; p != NULL; p = p->ai_next) {
-        sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
-        if (sockfd == -1) continue;
-
-        break;
-    }
-    if (p == NULL) {  // zaden adres nie byl dobry
-        fprintf(stderr, "Nie mozna utowrzyc socketu\n");
-        exit(1);
-    }
-    freeaddrinfo(results);
 
     memset(&my_addr, 0, sizeof(my_addr));
     my_addr.sin_family = AF_INET;
@@ -315,17 +328,12 @@ int main(int argc, char* argv[]) {
     printf("%s dolaczyl do gry.\n", inet_ntoa(gra->clientaddr.sin_addr));
     // end acknowledge
 
-    gra->gra.kogo_tura = 1;
-    gra->gra.isGameEnd = 0;
+    przygotuj_gre(gra);
     if (ack.is_server) {
         // to serwer ma poprawnie utworzyc gre
-        gra->gra.gracz1_wynik = gra->gra.gracz2_wynik = 0;
-        gra->gra.currentNumber = rand() % 10 + 1;
-        gra->ktory_gracz = 1;
-
         printf("Losowa wartosc poczatkowa: %d, podaj kolejna wartosc\n",
                gra->gra.currentNumber);
-
+        gra->ktory_gracz = 1;
     } else {
         gra->ktory_gracz = 2;
     }
