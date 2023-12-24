@@ -35,10 +35,57 @@ typedef struct {
     socklen_t clientlen;
 } Gra;
 
-typedef struct Umowa {
+typedef struct UsciskDloni {
     char is_server;
     char nick[NAZWA_MAX];
-} UscikDloni;
+} UsciskDloni;
+
+void przygotuj_gre(Gra* gra);
+
+void ustal_polaczenie(int sockfd, UsciskDloni* ack, Gra* gra,
+                      int wiem_ze_jestem_serwerem) {
+    if (wiem_ze_jestem_serwerem) {
+        recvfrom(sockfd, ack, sizeof(*ack), 0,
+                 (struct sockaddr*)&gra->clientaddr, &gra->clientlen);
+        ack->is_server = 1;
+        strcpy(gra->enemy_name, ack->nick);  // save enemy nickname
+
+        strcpy(ack->nick, gra->moja_nazwa);
+        sendto(sockfd, ack, sizeof(*ack), 0, (struct sockaddr*)&gra->clientaddr,
+               sizeof(gra->clientaddr));
+
+        przygotuj_gre(gra);
+        gra->ktory_gracz = 1;  // serwer czyli 1
+
+    } else {
+        strcpy(ack->nick, gra->moja_nazwa);
+        ack->is_server = 0;
+
+        sendto(sockfd, ack, sizeof(*ack), 0, (struct sockaddr*)&gra->clientaddr,
+               sizeof(gra->clientaddr));
+        printf("Propozycja gry wyslana.\n");
+
+        recvfrom(sockfd, ack, sizeof(*ack), 0,
+                 (struct sockaddr*)&gra->clientaddr, &gra->clientlen);
+
+        if (!ack->is_server) {  // host mowi ze nie jest serwerem
+            // wiec to ten host powinien byc serwerem
+            ack->is_server = 1;
+            strcpy(gra->enemy_name, ack->nick);  // save enemy nickname
+
+            strcpy(ack->nick, gra->moja_nazwa);
+
+            sendto(sockfd, ack, sizeof(*ack), 0,
+                   (struct sockaddr*)&gra->clientaddr, sizeof(gra->clientaddr));
+        } else {
+            // wiec ten host powinen byc klientem
+            ack->is_server = 0;
+            strcpy(gra->enemy_name, ack->nick);
+        }
+    }
+
+    printf("%s dolaczyl do gry.\n", inet_ntoa(gra->clientaddr.sin_addr));
+}
 
 void przygotuj_gre(Gra* gra) {
     gra->gra.gracz1_wynik = gra->gra.gracz2_wynik = 0;
@@ -61,7 +108,7 @@ void gra_ustaw_do_wyslania(Gra* gra) {
     gra->gra.currentNumber = htonl(gra->gra.currentNumber);
 }
 
-void recvGameInfo(int sockfd, Gra* gra, UscikDloni* ack) {
+void recvGameInfo(int sockfd, Gra* gra, UsciskDloni* ack) {
     while (8) {
         recvfrom(sockfd, &gra->gra, sizeof(Pakiet), 0,
                  (struct sockaddr*)&gra->clientaddr, &gra->clientlen);
@@ -71,21 +118,7 @@ void recvGameInfo(int sockfd, Gra* gra, UscikDloni* ack) {
                    gra->enemy_name);
 
             // wiemy ze teraz to my bedziemy serwerem
-
-            recvfrom(sockfd, ack, sizeof(*ack), 0,
-                     (struct sockaddr*)&gra->clientaddr, &gra->clientlen);
-            ack->is_server = 1;
-            strcpy(gra->enemy_name, ack->nick);  // save enemy nickname
-
-            strcpy(ack->nick, gra->moja_nazwa);
-            sendto(sockfd, ack, sizeof(*ack), 0,
-                   (struct sockaddr*)&gra->clientaddr, sizeof(gra->clientaddr));
-
-            przygotuj_gre(gra);
-            gra->ktory_gracz = 1;  // serwer czyli 1
-
-            printf("%s dolaczyl do gry.\n",
-                   inet_ntoa(gra->clientaddr.sin_addr));
+            ustal_polaczenie(sockfd, ack, gra, 1);
 
             printf("Losowa wartosc poczatkowa: %d, podaj kolejna wartosc\n",
                    gra->gra.currentNumber);
@@ -239,7 +272,7 @@ int main(int argc, char* argv[]) {
     key_t key;
     Gra* gra;
 
-    struct Umowa ack;
+    struct UsciskDloni ack;
 
     srand(time(NULL));
 
@@ -303,33 +336,8 @@ int main(int argc, char* argv[]) {
     } else {
         fillWithMyIP(sockfd, gra->moja_nazwa);
     }
-    strcpy(ack.nick, gra->moja_nazwa);
-    ack.is_server = 0;
 
-    sendto(sockfd, &ack, sizeof(ack), 0, (struct sockaddr*)&gra->clientaddr,
-           sizeof(gra->clientaddr));
-    printf("Propozycja gry wyslana.\n");
-
-    recvfrom(sockfd, &ack, sizeof(ack), 0, (struct sockaddr*)&gra->clientaddr,
-             &gra->clientlen);
-
-    if (!ack.is_server) {  // host mowi ze nie jest serwerem
-        // wiec to ten host powinien byc serwerem
-        ack.is_server = 1;
-        strcpy(gra->enemy_name, ack.nick);  // save enemy nickname
-
-        strcpy(ack.nick, gra->moja_nazwa);
-
-        sendto(sockfd, &ack, sizeof(ack), 0, (struct sockaddr*)&gra->clientaddr,
-               sizeof(gra->clientaddr));
-    } else {
-        // wiec ten host powinen byc klientem
-        ack.is_server = 0;
-        strcpy(gra->enemy_name, ack.nick);
-    }
-
-    printf("%s dolaczyl do gry.\n", inet_ntoa(gra->clientaddr.sin_addr));
-    // end acknowledge
+    ustal_polaczenie(sockfd, &ack, gra, 0);
 
     przygotuj_gre(gra);
     if (ack.is_server) {
