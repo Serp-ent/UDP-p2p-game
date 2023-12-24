@@ -178,6 +178,15 @@ void userInteraction(int sockfd, Gra* gra) {
     }
 }
 
+void fillWithMyIP(int sockfd, char* buf) {
+    struct sockaddr_in addr;
+    socklen_t len;
+
+    getsockname(sockfd, (struct sockaddr*)&addr, &len);
+
+    strcpy(buf, inet_ntoa(addr.sin_addr));
+}
+
 int shmid;
 
 int main(int argc, char* argv[]) {
@@ -200,15 +209,18 @@ int main(int argc, char* argv[]) {
     hints.ai_flags = 0;
     hints.ai_protocol = 0;
 
-    // TODO: BUG: error handling
-    if (argc != 5) {
-        fprintf(stderr, "Prosze podac cztery argumenty\n");
-        exit(1);
-    }
     srand(time(NULL));
 
-    key = ftok("main.c", argv[4][0]);
-    port = 30000 + argv[4][0];
+    // TODO: BUG: error handling
+    if (argc == 5) {
+        key = ftok("main.c", argv[4][0]);
+        port = 30000 + argv[4][0];
+    } else if (argc == 4) {
+        port = 30000 + argv[3][0];
+    } else {
+        fprintf(stderr, "Prosze podac conajmniej cztery argumenty\n");
+        exit(1);
+    }
 
     shmid = shmget(key, sizeof(Gra), 0644 | IPC_CREAT);
     gra = shmat(shmid, NULL, 0);
@@ -253,9 +265,12 @@ int main(int argc, char* argv[]) {
         "Napisz \"koniec\" by zakonczyc lub "
         "\"wynik\" by wyswietlic aktualny\n");
 
-    strcpy(gra->moja_nazwa, argv[3]);
-
     // begin acknowledge connection
+    if (argc == 5) {
+        strcpy(gra->moja_nazwa, argv[3]);
+    } else {
+        fillWithMyIP(sockfd, gra->moja_nazwa);
+    }
     strcpy(ack.nick, gra->moja_nazwa);
     ack.is_server = 0;
 
