@@ -16,6 +16,8 @@
 #define REPLY_MAX 32
 #define NAZWA_MAX 32
 
+#define PORT 5555
+
 typedef struct {
     int kogo_tura;
     int gracz1_wynik;
@@ -264,11 +266,15 @@ void fillWithMyIP(int sockfd, char* buf) {
 
 int shmid;
 
+void posprzataj(int sig) {
+    shmctl(shmid, IPC_RMID, NULL);
+    exit(0);
+}
+
 int main(int argc, char* argv[]) {
     pid_t pid;
     struct sockaddr_in my_addr;
     int sockfd;
-    int port;
     key_t key;
     Gra* gra;
 
@@ -276,17 +282,13 @@ int main(int argc, char* argv[]) {
 
     srand(time(NULL));
 
-    if (argc == 5) {
-        key = ftok("main.c", argv[4][0]);
-        port = 30000 + argv[4][0];
-    } else if (argc == 4) {
-        key = ftok("main.c", argv[3][0]);
-        port = 30000 + argv[3][0];
-    } else {
-        fprintf(stderr, "Prosze podac conajmniej cztery argumenty\n");
+    if (argc != 4 && argc != 3) {
+        fprintf(stderr, "uzycie: %s: <ip> <port> [ nazwa uzytkonika ]\n",
+                argv[0]);
         exit(1);
     }
 
+    key = ftok("main.c", 'a');
     if (key == -1) {
         perror("Nie mozna wygenerowac klucza");
         exit(1);
@@ -297,6 +299,7 @@ int main(int argc, char* argv[]) {
         perror("Nie mozna utworzyc pamieci wspoldzielonej");
         exit(1);
     }
+    signal(SIGINT, posprzataj);
 
     gra = shmat(shmid, NULL, 0);
     if (gra == (void*)-1) {
@@ -312,9 +315,11 @@ int main(int argc, char* argv[]) {
 
     memset(&my_addr, 0, sizeof(my_addr));
     my_addr.sin_family = AF_INET;
-    my_addr.sin_port = htons(port);
+    my_addr.sin_port = htons(PORT);
     my_addr.sin_addr.s_addr = htonl(INADDR_ANY);  // dowolny (moj) interfejs
     if (bind(sockfd, (struct sockaddr*)&my_addr, sizeof(my_addr)) == -1) {
+        shmctl(shmid, IPC_RMID, NULL);
+
         perror("Nie mozna powiazac socketu z portem");
         exit(1);
     }
@@ -324,14 +329,13 @@ int main(int argc, char* argv[]) {
     gra->clientaddr.sin_port = htons((u_short)atoi(argv[2]));
     inet_aton(argv[1], &gra->clientaddr.sin_addr);
 
-    printf("Gra w 50, Wersja A. (PORT: %d)\n", port);
+    printf("Gra w 50, Wersja A.\n");
     printf("Rozpoczynam gre z %s. ", argv[1]);
     printf(
         "Napisz \"koniec\" by zakonczyc lub "
         "\"wynik\" by wyswietlic aktualny\n");
 
-    // begin acknowledge connection
-    if (argc == 5) {
+    if (argc == 4) {
         strcpy(gra->moja_nazwa, argv[3]);
     } else {
         fillWithMyIP(sockfd, gra->moja_nazwa);
