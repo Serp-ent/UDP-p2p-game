@@ -44,64 +44,6 @@ struct UsciskDloni {
     char nick[NAZWA_MAX];
 };
 
-void przygotuj_gre(struct Gra* gra);
-
-void ustal_polaczenie(int sockfd, struct UsciskDloni* ack, struct Gra* gra,
-                      int wiem_ze_jestem_serwerem) {
-    if (wiem_ze_jestem_serwerem) {
-        recvfrom(sockfd, ack, sizeof(*ack), 0,
-                 (struct sockaddr*)&gra->clientaddr, &gra->clientlen);
-
-        // set enemy nickname
-        if (strcmp("", ack->nick) == 0) {
-            strcpy(gra->enemy_name, inet_ntoa(gra->clientaddr.sin_addr));
-        } else {
-            strcpy(gra->enemy_name, ack->nick);
-        }
-
-        ack->is_server = 1;
-        strcpy(ack->nick, gra->moja_nazwa);
-
-        sendto(sockfd, ack, sizeof(*ack), 0, (struct sockaddr*)&gra->clientaddr,
-               sizeof(gra->clientaddr));
-
-        przygotuj_gre(gra);
-        // taka nasza konwencja ze serwer to gracz 1 i to on zaczyna nowa gre
-        gra->ktory_gracz = 1;  // serwer czyli 1
-
-    } else {
-        strcpy(ack->nick, gra->moja_nazwa);
-        ack->is_server = 0;  // na poczatku zalkadamy ze nie jestesmy serwerem
-
-        sendto(sockfd, ack, sizeof(*ack), 0, (struct sockaddr*)&gra->clientaddr,
-               sizeof(gra->clientaddr));
-        printf("Propozycja gry wyslana.\n");
-
-        recvfrom(sockfd, ack, sizeof(*ack), 0,
-                 (struct sockaddr*)&gra->clientaddr, &gra->clientlen);
-
-        // set enemy nickname
-        if (strcmp("", ack->nick) == 0) {
-            strcpy(gra->enemy_name, inet_ntoa(gra->clientaddr.sin_addr));
-        } else {
-            strcpy(gra->enemy_name, ack->nick);
-        }
-
-        if (!ack->is_server) {  // host mowi ze nie jest serwerem
-
-            ack->is_server = 1;
-            strcpy(ack->nick, gra->moja_nazwa);
-
-            sendto(sockfd, ack, sizeof(*ack), 0,
-                   (struct sockaddr*)&gra->clientaddr, sizeof(gra->clientaddr));
-        } else {
-            ack->is_server = 0;
-        }
-    }
-
-    printf("%s dolaczyl do gry.\n", inet_ntoa(gra->clientaddr.sin_addr));
-}
-
 void przygotuj_gre(struct Gra* gra) {
     gra->gra.gracz1_wynik = gra->gra.gracz2_wynik = 0;
     gra->gra.currentNumber = rand() % 10 + 1;
@@ -110,6 +52,53 @@ void przygotuj_gre(struct Gra* gra) {
 
     gra->gra.kogo_tura = 1;
     gra->gra.ktoZaczynal = 1;
+}
+
+void ustaw_nick_przeciwnika(struct Gra* gra, char* nick) {
+    if (strcmp("", nick) == 0) {
+        strcpy(gra->enemy_name, inet_ntoa(gra->clientaddr.sin_addr));
+    } else {
+        strcpy(gra->enemy_name, nick);
+    }
+}
+
+void ustal_polaczenie(int sockfd, struct UsciskDloni* ack, struct Gra* gra,
+                      int wiem_ze_jestem_serwerem) {
+    if (wiem_ze_jestem_serwerem) {
+        recvfrom(sockfd, ack, sizeof(*ack), 0,
+                 (struct sockaddr*)&gra->clientaddr, &gra->clientlen);
+        ustaw_nick_przeciwnika(gra, ack->nick);
+
+        ack->is_server = 1;
+        strcpy(ack->nick, gra->moja_nazwa);
+        sendto(sockfd, ack, sizeof(*ack), 0, (struct sockaddr*)&gra->clientaddr,
+               sizeof(gra->clientaddr));
+        przygotuj_gre(gra);
+        // taka nasza konwencja ze serwer to gracz 1 i to on zaczyna nowa gre
+        gra->ktory_gracz = 1;  // serwer czyli 1
+
+    } else {
+        strcpy(ack->nick, gra->moja_nazwa);
+        ack->is_server = 0;  // na poczatku zalkadamy ze nie jestesmy serwerem
+        sendto(sockfd, ack, sizeof(*ack), 0, (struct sockaddr*)&gra->clientaddr,
+               sizeof(gra->clientaddr));
+        printf("Propozycja gry wyslana.\n");
+
+        recvfrom(sockfd, ack, sizeof(*ack), 0,
+                 (struct sockaddr*)&gra->clientaddr, &gra->clientlen);
+        ustaw_nick_przeciwnika(gra, ack->nick);
+
+        if (!ack->is_server) {  // host mowi ze nie jest serwerem
+            ack->is_server = 1;
+            strcpy(ack->nick, gra->moja_nazwa);
+            sendto(sockfd, ack, sizeof(*ack), 0,
+                   (struct sockaddr*)&gra->clientaddr, sizeof(gra->clientaddr));
+        } else {
+            ack->is_server = 0;
+        }
+    }
+
+    printf("%s dolaczyl do gry.\n", inet_ntoa(gra->clientaddr.sin_addr));
 }
 
 void gra_ustaw_na_hosta(struct Gra* gra) {
@@ -124,7 +113,7 @@ void gra_ustaw_do_wyslania(struct Gra* gra) {
     gra->gra.currentNumber = htonl(gra->gra.currentNumber);
 }
 
-void recvGameInfo(int sockfd, struct Gra* gra, struct UsciskDloni* ack) {
+void czekaj_na_pakiet(int sockfd, struct Gra* gra, struct UsciskDloni* ack) {
     while (8) {
         recvfrom(sockfd, &gra->gra, sizeof(struct Pakiet), 0,
                  (struct sockaddr*)&gra->clientaddr, &gra->clientlen);
@@ -147,15 +136,17 @@ void recvGameInfo(int sockfd, struct Gra* gra, struct UsciskDloni* ack) {
         if (gra->gra.currentNumber == 50) {
             printf("\nPrzegrana!\n");
 
-            printf("Zaczynamy kolejna rozgrywke\n");
+            printf("Zaczynamy kolejna rozgrywke");
 
             if (gra->gra.ktoZaczynal != gra->ktory_gracz) {
                 gra->gra.ktoZaczynal = gra->ktory_gracz;
                 gra->gra.kogo_tura = gra->ktory_gracz;
 
                 gra->gra.currentNumber = getpid() % 10 + 1;
-                printf("Losowa wartosc poczatkowa %d, podaj kolejna wartosc\n",
+                printf("\nLosowa wartosc poczatkowa %d, podaj kolejna wartosc\n",
                        gra->gra.currentNumber);
+            } else {
+                printf(", zaczekaj na swoja kolej\n");
             }
             continue;  // zacznij nowa rozgrywke
         }
@@ -163,8 +154,65 @@ void recvGameInfo(int sockfd, struct Gra* gra, struct UsciskDloni* ack) {
         printf(", podaj kolejna wartosc.\n");
     }
 }
+void poinformuj_przecinika(int sockfd, struct Gra* gra) {
+    // sprawdzenie czy wogole z kims gramy
+    // jesli tak to poinformuj go o zakonczeniu
+    if (!gra->gra.czyKoniecGry) {  // gra jest w trakcie
+        gra->gra.czyKoniecGry = 1;
+        if (sendto(sockfd, &gra->gra, sizeof(struct Pakiet), 0,
+                   (struct sockaddr*)&gra->clientaddr, gra->clientlen) == -1) {
+            perror("sendto");
+        }
+    }
+}
 
-void userInteraction(int sockfd, struct Gra* gra) {
+void wyswietl_wynik(struct Gra* gra) {
+    if (gra->gra.czyKoniecGry) {
+        printf("Brak gry w trakcie\n");
+        return;
+    }
+
+    if (gra->ktory_gracz == 1) {
+        printf("Ty %d : %d %s\n", gra->gra.gracz1_wynik, gra->gra.gracz2_wynik,
+               gra->enemy_name);
+    } else {
+        printf("Ty %d : %d %s\n", gra->gra.gracz2_wynik, gra->gra.gracz1_wynik,
+               gra->enemy_name);
+    }
+}
+
+void wyslij_pakiet(int sockfd, struct Gra* gra) {
+    gra_ustaw_do_wyslania(gra);
+
+    if (sendto(sockfd, &gra->gra, sizeof(struct Pakiet), 0,
+               (struct sockaddr*)&gra->clientaddr, gra->clientlen) == -1) {
+        perror("sendto");
+    }
+    gra_ustaw_na_hosta(gra);
+}
+
+void poinformuj_o_wygranej(int sockfd, struct Gra* gra) {
+    wyslij_pakiet(sockfd, gra);
+
+    if (gra->gra.ktoZaczynal != gra->ktory_gracz) {
+        // teraz my zaczynamy
+        gra->gra.ktoZaczynal = gra->ktory_gracz;
+        gra->gra.kogo_tura = gra->ktory_gracz;
+        gra->gra.currentNumber = getpid() % 10 + 1;
+        printf("Losowa wartosc poczatkowa %d, podaj kolejna wartosc\n",
+               gra->gra.currentNumber);
+    } else {
+        printf(
+            "Zaczynamy kolejna rozgrywke, poczekaj na swoja "
+            "kolej\n");
+    }
+}
+
+void tura_nastepnego_gracza(struct Gra* gra) {
+    gra->gra.kogo_tura = (gra->gra.kogo_tura == 1) ? 2 : 1;
+}
+
+void tryb_interaktywny(int sockfd, struct Gra* gra) {
     char reply[REPLY_MAX];
     while (8) {
         printf("> ");
@@ -173,44 +221,23 @@ void userInteraction(int sockfd, struct Gra* gra) {
             ;
 
         if (strcmp("koniec", reply) == 0) {
-            // sprawdzenie czy wogole z kims gramy
-            // jesli tak to poinformuj go o zakonczeniu
-            if (!gra->gra.czyKoniecGry) {  // gra jest w trakcie
-                gra->gra.czyKoniecGry = 1;
-                if (sendto(sockfd, &gra->gra, sizeof(struct Pakiet), 0,
-                           (struct sockaddr*)&gra->clientaddr,
-                           gra->clientlen) == -1) {
-                    perror("sendto");
-                }
-            }
-
+            poinformuj_przecinika(sockfd, gra);
             break;
         } else if (strcmp("wynik", reply) == 0) {
-            if (gra->gra.czyKoniecGry) {
-                printf("Brak gry w trakcie\n");
-                continue;
-            }
-
-            if (gra->ktory_gracz == 1) {
-                printf("Ty %d : %d %s\n", gra->gra.gracz1_wynik,
-                       gra->gra.gracz2_wynik, gra->enemy_name);
-            } else {
-                printf("Ty %d : %d %s\n", gra->gra.gracz2_wynik,
-                       gra->gra.gracz1_wynik, gra->enemy_name);
-            }
+            wyswietl_wynik(gra);
         } else {
             if (gra->gra.czyKoniecGry) {
                 printf("Brak gry w trakcie\n");
                 continue;
             }
 
-            int nowa_wartosc = atoi(reply);
             if (gra->gra.kogo_tura != gra->ktory_gracz) {
                 printf("Teraz tura gracza %s, poczekaj na swoja kolej\n",
                        gra->enemy_name);
                 continue;
             }
 
+            int nowa_wartosc = atoi(reply);
             if ((nowa_wartosc - gra->gra.currentNumber) < 1 ||
                 (nowa_wartosc - gra->gra.currentNumber) > 10 ||
                 nowa_wartosc > 50) {
@@ -219,7 +246,7 @@ void userInteraction(int sockfd, struct Gra* gra) {
             }
 
             gra->gra.currentNumber = nowa_wartosc;
-            if (gra->gra.currentNumber == 50) {
+            if (gra->gra.currentNumber == 50) {  // koniec gry
                 printf("Wygrana!\n");
                 if (gra->ktory_gracz == 1) {
                     ++gra->gra.gracz1_wynik;
@@ -227,40 +254,13 @@ void userInteraction(int sockfd, struct Gra* gra) {
                     ++gra->gra.gracz2_wynik;
                 }
 
-                gra_ustaw_do_wyslania(gra);
-
-                if (sendto(sockfd, &gra->gra, sizeof(struct Pakiet), 0,
-                           (struct sockaddr*)&gra->clientaddr,
-                           gra->clientlen) == -1) {
-                    perror("sendto");
-                }
-                gra_ustaw_na_hosta(gra);
-
-                if (gra->gra.ktoZaczynal != gra->ktory_gracz) {
-                    // teraz my zaczynamy
-                    gra->gra.ktoZaczynal = gra->ktory_gracz;
-                    gra->gra.kogo_tura = gra->ktory_gracz;
-                    gra->gra.currentNumber = getpid() % 10 + 1;
-                    printf(
-                        "Losowa wartosc poczatkowa %d, podaj kolejna wartosc\n",
-                        gra->gra.currentNumber);
-                    continue;
-                }
-                printf(
-                    "Zaczynamy kolejna rozgrywke., poczekaj na swoja "
-                    "kolej\n");
+                poinformuj_o_wygranej(sockfd, gra);
+                // i przydziel kto teraz zaczyna
+                continue;
             }
 
-            gra->gra.kogo_tura = (gra->gra.kogo_tura == 1) ? 2 : 1;
-            gra_ustaw_do_wyslania(gra);
-
-            if (sendto(sockfd, &gra->gra, sizeof(struct Pakiet), 0,
-                       (struct sockaddr*)&gra->clientaddr,
-                       gra->clientlen) == -1) {
-                perror("sendto");
-            }
-
-            gra_ustaw_na_hosta(gra);
+            tura_nastepnego_gracza(gra);
+            wyslij_pakiet(sockfd, gra);
         }
     }
 }
@@ -304,15 +304,6 @@ int przygotuj_socket(char* domena, char* port, struct Gra* gra) {
     return sockfd;
 }
 
-void fillWithMyIP(int sockfd, char* buf) {
-    struct sockaddr_in addr;
-    socklen_t len;
-
-    getsockname(sockfd, (struct sockaddr*)&addr, &len);
-
-    strcpy(buf, inet_ntoa(addr.sin_addr));
-}
-
 int shmid;
 
 void posprzataj(int sig) {
@@ -320,24 +311,11 @@ void posprzataj(int sig) {
     exit(0);
 }
 
-int main(int argc, char* argv[]) {
-    pid_t pid;
-    struct sockaddr_in my_addr;
-    int sockfd;
+struct Gra* create_shm_from_key(const char* keyfile, char k) {
     key_t key;
     struct Gra* gra;
 
-    struct UsciskDloni ack;
-
-    srand(time(NULL));
-
-    if (argc != 4 && argc != 3) {
-        fprintf(stderr, "uzycie: %s: <ip> <port> [ nazwa uzytkonika ]\n",
-                argv[0]);
-        exit(1);
-    }
-
-    key = ftok("main.c", 'a');
+    key = ftok(keyfile, k);
     if (key == -1) {
         perror("Nie mozna wygenerowac klucza");
         exit(1);
@@ -348,13 +326,36 @@ int main(int argc, char* argv[]) {
         perror("Nie mozna utworzyc pamieci wspoldzielonej");
         exit(1);
     }
-    signal(SIGINT, posprzataj);
 
     gra = shmat(shmid, NULL, 0);
     if (gra == (void*)-1) {
-        perror("shmat()");
+        perror("nie mozna podlaczyc pamieci wspoldzielonej shmat()");
+
+        shmctl(shmid, IPC_RMID, 0);
         exit(1);
     }
+
+    return gra;
+}
+
+int main(int argc, char* argv[]) {
+    pid_t pid;
+    int sockfd;
+
+    struct sockaddr_in my_addr;
+    struct Gra* gra;
+    struct UsciskDloni ack;
+
+    srand(time(NULL));
+
+    if (argc != 4 && argc != 3) {
+        fprintf(stderr, "uzycie: %s: <ip> <port> [ nazwa uzytkonika ]\n",
+                argv[0]);
+        exit(1);
+    }
+
+    gra = create_shm_from_key("main.c", 'a');
+    signal(SIGINT, posprzataj);
 
     sockfd = przygotuj_socket(argv[1], argv[2], gra);
     if (sockfd == -1) {
@@ -387,7 +388,8 @@ int main(int argc, char* argv[]) {
     }
 
     ustal_polaczenie(sockfd, &ack, gra, 0);
-
+    // klient tak samo musi przygotowac lokalna gre
+    // bo wie ze to serwer zaczyna i wie ze nie jest serwerem
     przygotuj_gre(gra);
     if (ack.is_server) {
         printf("Losowa wartosc poczatkowa: %d, podaj kolejna wartosc\n",
@@ -399,11 +401,11 @@ int main(int argc, char* argv[]) {
 
     pid = fork();
     if (pid == 0) {
-        recvGameInfo(sockfd, gra, &ack);
+        czekaj_na_pakiet(sockfd, gra, &ack);
         close(sockfd);
         exit(0);
     } else if (pid > 0) {
-        userInteraction(sockfd, gra);
+        tryb_interaktywny(sockfd, gra);
         kill(pid, SIGTERM);
 
         waitpid(pid, NULL, 0);
