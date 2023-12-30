@@ -19,11 +19,13 @@
 #define PORT 5555
 
 struct Pakiet {
-    int kogo_tura;
     int gracz1_wynik;
     int gracz2_wynik;
+
     int currentNumber;
-    int czyKoniecGry;
+    char kogo_tura;
+    char czyKoniecGry;
+    char ktoZaczynal;
 };
 
 struct Gra {
@@ -107,17 +109,16 @@ void przygotuj_gre(struct Gra* gra) {
     gra->gra.czyKoniecGry = 0;
 
     gra->gra.kogo_tura = 1;
+    gra->gra.ktoZaczynal = 1;
 }
 
 void gra_ustaw_na_hosta(struct Gra* gra) {
     gra->gra.gracz1_wynik = ntohl(gra->gra.gracz1_wynik);
     gra->gra.gracz2_wynik = ntohl(gra->gra.gracz2_wynik);
     gra->gra.currentNumber = ntohl(gra->gra.currentNumber);
-    gra->gra.kogo_tura = ntohl(gra->gra.kogo_tura);
 }
 
 void gra_ustaw_do_wyslania(struct Gra* gra) {
-    gra->gra.kogo_tura = htonl(gra->gra.kogo_tura);
     gra->gra.gracz1_wynik = htonl(gra->gra.gracz1_wynik);
     gra->gra.gracz2_wynik = htonl(gra->gra.gracz2_wynik);
     gra->gra.currentNumber = htonl(gra->gra.currentNumber);
@@ -144,13 +145,18 @@ void recvGameInfo(int sockfd, struct Gra* gra, struct UsciskDloni* ack) {
                gra->gra.currentNumber);
 
         if (gra->gra.currentNumber == 50) {
-            // TODO: to przegrany zawsze zaczyna ture
             printf("\nPrzegrana!\n");
 
             printf("Zaczynamy kolejna rozgrywke\n");
-            gra->gra.currentNumber = getpid() % 10 + 1;
-            printf("Losowa wartosc poczatkowa %d, podaj kolejna wartosc\n",
-                   gra->gra.currentNumber);
+
+            if (gra->gra.ktoZaczynal != gra->ktory_gracz) {
+                gra->gra.ktoZaczynal = gra->ktory_gracz;
+                gra->gra.kogo_tura = gra->ktory_gracz;
+
+                gra->gra.currentNumber = getpid() % 10 + 1;
+                printf("Losowa wartosc poczatkowa %d, podaj kolejna wartosc\n",
+                       gra->gra.currentNumber);
+            }
             continue;  // zacznij nowa rozgrywke
         }
 
@@ -167,12 +173,15 @@ void userInteraction(int sockfd, struct Gra* gra) {
             ;
 
         if (strcmp("koniec", reply) == 0) {
-            gra->gra.czyKoniecGry = 1;
-
-            if (sendto(sockfd, &gra->gra, sizeof(struct Pakiet), 0,
-                       (struct sockaddr*)&gra->clientaddr,
-                       gra->clientlen) == -1) {
-                perror("sendto");
+            // sprawdzenie czy wogole z kims gramy
+            // jesli tak to poinformuj go o zakonczeniu
+            if (!gra->gra.czyKoniecGry) {  // gra jest w trakcie
+                gra->gra.czyKoniecGry = 1;
+                if (sendto(sockfd, &gra->gra, sizeof(struct Pakiet), 0,
+                           (struct sockaddr*)&gra->clientaddr,
+                           gra->clientlen) == -1) {
+                    perror("sendto");
+                }
             }
 
             break;
@@ -217,8 +226,29 @@ void userInteraction(int sockfd, struct Gra* gra) {
                 } else {
                     ++gra->gra.gracz2_wynik;
                 }
+
+                gra_ustaw_do_wyslania(gra);
+
+                if (sendto(sockfd, &gra->gra, sizeof(struct Pakiet), 0,
+                           (struct sockaddr*)&gra->clientaddr,
+                           gra->clientlen) == -1) {
+                    perror("sendto");
+                }
+                gra_ustaw_na_hosta(gra);
+
+                if (gra->gra.ktoZaczynal != gra->ktory_gracz) {
+                    // teraz my zaczynamy
+                    gra->gra.ktoZaczynal = gra->ktory_gracz;
+                    gra->gra.kogo_tura = gra->ktory_gracz;
+                    gra->gra.currentNumber = getpid() % 10 + 1;
+                    printf(
+                        "Losowa wartosc poczatkowa %d, podaj kolejna wartosc\n",
+                        gra->gra.currentNumber);
+                    continue;
+                }
                 printf(
-                    "Zaczynamy kolejna rozgrywke., poczekaj na swoja kolej\n");
+                    "Zaczynamy kolejna rozgrywke., poczekaj na swoja "
+                    "kolej\n");
             }
 
             gra->gra.kogo_tura = (gra->gra.kogo_tura == 1) ? 2 : 1;
